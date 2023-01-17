@@ -1,0 +1,5 @@
+Copyright 2023 by Ethan Ligon
+
+Based in part on earlier work by Michael Ball (https://michaelball.co/), but any errors or omissions the responsibility of Ethan Ligon.
+
+This work is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License. To view a copy of this license, visit http://creativecommons.org/licenses/by-nc-sa/4.0/ or send a letter to Creative Commons, PO Box 1866, Mountain View, CA 94042, USA.
