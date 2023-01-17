@@ -1,0 +1,165 @@
+* Data Data Sources & Info
+
+Data collected via https://ucannualwage.ucop.edu/, via the command line:
+#+begin_src jupyter-python
+year=2021
+
+curl 'https://ucannualwage.ucop.edu/wage/search.action?_search=false&nd=1631391241333&rows=600000&page=1&sidx=EAW_LST_NAM&sord=asc&year=$year&location=ALL&firstname=&lastname=&title=&startSal=&endSal=' -o all-records-$year.json
+#+end_src
+
+
+* Pay Descriptions
+Data reports both "gross" and "regular" pay.
+  - Gross Pay = base salary + additional funding (grants, etc)
+  - Regular Pay = base salary
+* Preface
+#+begin_src jupyter-python
+import pandas as pd
+import numpy as np
+import json
+import re
+
+%matplotlib inline
+#+end_src
+
+* Title Codes
+There is a complicated collection of titles corresponding to different codes.  That mapping is described here:
+#+begin_src jupyter-python
+TITLE_CODE_TYPE_SHEET = 'https://docs.google.com/spreadsheets/u/1/d/19MG1bKoQh6o6PAAYHAmdFyNpNspQ3tfQ6jpMbou_rw8/gviz/tq?tqx=out:csv&sheet=All%20UC%20Title%20Codes'
+
+TITLE_CODE_MAP = pd.read_csv(TITLE_CODE_TYPE_SHEET)
+print(TITLE_CODE_MAP['Category'].unique())
+#+end_src
+
+* Salary Data
+Some utility code to map salary data for range of years into a dataframe.
+#+begin_src jupyter-python
+PAY_COL = 'Regular Pay' # ALternatively "Gross Pay"
+
+# id is just the row number PER YEAR, but not super meaningful.
+# it is included in the JSON data.
+COLUMNS = ['id', 'Year', 'Location', 'First Name', 'Last Name', 'Title', 'Gross Pay', 'Regular Pay', 'Overtime Pay', 'Other Pay']
+# LECT_PREFIX = 'LECT-' # Captures 'LECT-AY', excludes LECT PSOE / LECT SOE
+
+def safe_parse(value):
+    try:
+        return float(value)
+    except:
+        return value
+
+DATA_LOADED = {}
+def load_data_for_year(year):
+    raw_data = open(f"data/json/all-records-{year}.json").read()
+    raw_data = raw_data.replace("'", '"')
+    raw_data = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', raw_data)
+    parsed = json.loads(raw_data)
+    data = [ [ safe_parse(value) for value in row['cell'] ] for row in parsed['rows'] ]
+
+    df = pd.DataFrame(data, columns= COLUMNS)
+
+    # Drop "zero" pay records
+    df = df.loc[ df[PAY_COL] > 0]
+
+    return df
+
+def load_data(years=range(2012,2022)):
+    D = []
+    for t in years:
+        D.append(load_data_for_year(t))
+    return pd.concat(D)
+#+end_src
+
+* Pay DataFrame
+Here we finally construct a dataframe for employee-titles.  This is for /everyone/ employed system-wide over the specified time range.
+#+begin_src jupyter-python
+Pay = load_data()
+Pay['Name'] = Pay['Last Name'].astype(str) + ', ' + Pay['First Name']
+Pay['Year'] = Pay['Year'].astype(int)
+Pay = Pay.set_index(['Name','Year'])
+
+Pay
+#+end_src
+
+Here are student titles
+#+begin_src jupyter-python
+def filter_by_school(df, location):
+    return df.loc[ df['Location'] == location ]
+
+valid_categories = TITLE_CODE_MAP['Category'].unique()
+def titles_in_category(df, category):
+    if not category or category == 'All':
+        return df # just don't filter.
+    if type(category) != list:
+        category = [category]
+    for c in category:
+        assert c in valid_categories,  f'"{c}" is not a valid title code category'
+    titles = TITLE_CODE_MAP[TITLE_CODE_MAP['Category'].isin(category)]['Title']
+    return df.loc[ df['Title'].isin(titles) ]
+
+
+TITLE_CODE_MAP.loc[TITLE_CODE_MAP['Category'].fillna('Missing').str.startswith('Student '),'Title']
+#+end_src
+
+
+Now, construct different data frames for students, senate faculty, administrators, and employees of the athletic department.
+#+begin_src jupyter-python
+Student_pay = titles_in_category(Pay, ['Student Instruction','Student Reasearch'] )
+Senate_pay= titles_in_category(Pay, ['Senate'] )
+Admin_pay = titles_in_category(Pay,['Admin','Admin Staff','Staff'])
+Athletic_pay = titles_in_category(Pay,['Athletics','Coach'])
+#+end_src
+
+Take a look at growth rates of mean pay by type, just at Berkeley
+#+begin_src jupyter-python
+pay_by_type = pd.DataFrame({'Student':Student_pay.loc[Student_pay['Location']=='Berkeley'].groupby('Year')['Regular Pay'].sum(),
+              'Senate':Senate_pay.loc[Senate_pay['Location']=='Berkeley'].groupby('Year')['Regular Pay'].mean(),
+              'Admin':Admin_pay.loc[Admin_pay['Location']=='Berkeley'].groupby('Year')['Regular Pay'].mean(),
+              'Athletics':Athletic_pay.loc[Athletic_pay['Location']=='Berkeley'].groupby('Year')['Regular Pay'].mean()})
+
+np.log(pay_by_type).diff().plot()
+#+end_src
+
+Same, but systemwide
+#+begin_src jupyter-python
+pay_by_type = pd.DataFrame({'Student':Student_pay.groupby('Year')['Regular Pay'].sum(),
+              'Senate':Senate_pay.groupby('Year')['Regular Pay'].sum(),
+              'Admin':Admin_pay.groupby('Year')['Regular Pay'].sum()})
+              #'Athletics':Athletic_pay.groupby('Year')['Regular Pay'].mean()})
+
+np.log(pay_by_type).diff().plot()
+#+end_src
+
+Now look specifically at GSRs at Berkeley in 2021.  What's modal pay?  And let's see a graph.
+#+begin_src jupyter-python
+Student_pay.loc[Student_pay.Title.isin(['GSR-FULL FEE REM','GSR-TUIT & FEE REM'])*(Student_pay.Location=='Berkeley')].groupby(['Year','Location'])['Regular Pay'].apply(pd.Series.mode)
+
+
+ax=Student_pay.loc[Student_pay.Title.isin(['GSR-FULL FEE REM','GSR-TUIT & FEE REM'])*(Student_pay.Location=='Berkeley')].query("Year==2021")['Regular Pay'].hist(bins=50)
+
+# Uncomment this to see one of the teaching titles:
+#Student_pay.loc[Student_pay.Title.isin(['TEACHG ASST-1/10-GSHIP'])*(Student_pay.Location=='Berkeley')].query("Year==2021")['Regular Pay'].hist(bins=20,ax=ax)
+#+end_src
+
+
+And here's the most common student teaching title.  How much are GSIs actually paid?
+#+begin_src jupyter-python
+(Student_pay.loc[Student_pay.Title.isin(['TEACHG ASST-1/10-GSHIP'])*(Student_pay.Location=='Berkeley')].query("Year==2021")['Regular Pay']).hist(bins=40)
+#+end_src
+
+
+How does student pay vary across campuses, and across time?
+#+begin_src jupyter-python
+Student_pay.groupby(['Location','Year'])['Regular Pay'].mean().unstack('Location')
+#+end_src
+
+Finally, looking just at pay in 2021 for students at Berkeley in 2021:
+#+begin_src jupyter-python
+salaries = load_data_for_year('2021')
+
+student_salaries = titles_in_category(salaries, ['Student Instruction','Student Reasearch'] ) 
+all_berkeley_salaries = filter_by_school(salaries, 'Berkeley')
+berkeley_student_salaries = filter_by_school(student_salaries, "Berkeley")
+
+
+Student_pay.query("Location=='Berkeley' and Year==2021").groupby(['Year']).Title.value_counts()
+#+end_src
